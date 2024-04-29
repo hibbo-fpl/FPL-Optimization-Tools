@@ -230,7 +230,7 @@ def prep_data(my_data, options):
             safe_players.append(bt['transfer_out'])
     if ev_per_price_cutoff != 0:
         cutoff = (merged_data['total_ev'] / merged_data['now_cost']).quantile(ev_per_price_cutoff/100)
-        merged_data = merged_data[(merged_data['total_ev'] / merged_data['now_cost'] > cutoff) | (merged_data['review_id'].isin(safe_players))].copy()
+        merged_data = merged_data[(merged_data['total_ev'] / merged_data['now_cost'] >= cutoff) | (merged_data['review_id'].isin(safe_players))].copy()
 
     print(len(merged_data), "total players (after)")
 
@@ -310,7 +310,7 @@ def solve_multi_period_fpl(data, options):
     horizon = options.get('horizon', 3)
     objective = options.get('objective', 'decay')
     decay_base = options.get('decay_base', 0.84)
-    bench_weights = options.get('bench_weights', {0: 0.03, 1: 0.21, 2: 0.06, 3: 0.002})
+    bench_weights = options.get('bench_weights', {0: 0.03, 1: 0.15, 2: 0.05, 3: 0.002})
     bench_weights = {int(key): value for (key,value) in bench_weights.items()}
     # wc_limit = options.get('wc_limit', 0)
     ft_value = options.get('ft_value', 1.5)
@@ -364,6 +364,8 @@ def solve_multi_period_fpl(data, options):
     # Variables
     squad = model.add_variables(players, all_gw, name='squad', vartype=so.binary)
     squad_fh = model.add_variables(players, gameweeks, name='squad_fh', vartype=so.binary)
+    squad_ru = model.add_variables(players, gameweeks, name='squad_ru', vartype=so.binary)
+    aa_ind = model.add_variables(players, gameweeks, vartype=so.binary, name='aa_ind')
     lineup = model.add_variables(players, gameweeks, name='lineup', vartype=so.binary)
     captain = model.add_variables(players, gameweeks, name='captain', vartype=so.binary)
     vicecap = model.add_variables(players, gameweeks, name='vicecap', vartype=so.binary)
@@ -386,11 +388,16 @@ def solve_multi_period_fpl(data, options):
     use_bb = model.add_variables(gameweeks, name='use_bb', vartype=so.binary)
     use_fh = model.add_variables(gameweeks, name='use_fh', vartype=so.binary)
     use_tc = model.add_variables(players, gameweeks, name='use_tc', vartype=so.binary)
+    use_ru = model.add_variables(gameweeks, name='use_ru', vartype=so.binary)
+    use_2c = model.add_variables(gameweeks, name='use_2c', vartype=so.binary)
+    use_aa = model.add_variables(gameweeks, name='use_aa', vartype=so.binary)
+    
 
     # Dictionaries
     lineup_type_count = {(t,w): so.expr_sum(lineup[p,w] for p in players if merged_data.loc[p, 'element_type'] == t) for t in element_types for w in gameweeks}
     squad_type_count = {(t,w): so.expr_sum(squad[p,w] for p in players if merged_data.loc[p, 'element_type'] == t) for t in element_types for w in gameweeks}
     squad_fh_type_count = {(t,w): so.expr_sum(squad_fh[p,w] for p in players if merged_data.loc[p, 'element_type'] == t) for t in element_types for w in gameweeks}
+    squad_ru_type_count = {(t,w): so.expr_sum(squad_ru[p,w] for p in players if merged_data.loc[p, 'element_type'] == t) for t in element_types for w in gameweeks}
     player_type = merged_data['element_type'].to_dict()
     # player_price = (merged_data['now_cost'] / 10).to_dict()
     sell_price = data['sell_price']
@@ -400,15 +407,23 @@ def solve_multi_period_fpl(data, options):
         so.expr_sum(buy_price[p] * transfer_out_regular[p,w] for p in players)
         for w in gameweeks}
     fh_sell_price = {p: sell_price[p] if p in price_modified_players else buy_price[p] for p in players}
+    ru_sell_price = {p: sell_price[p] if p in price_modified_players else buy_price[p] for p in players}
     bought_amount = {w: so.expr_sum(buy_price[p] * transfer_in[p,w] for p in players) for w in gameweeks}
     points_player_week = {(p,w): merged_data.loc[p, f'{w}_Pts'] for p in players for w in gameweeks}
     minutes_player_week = {(p,w): merged_data.loc[p, f'{w}_xMins'] for p in players for w in gameweeks}
     squad_count = {w: so.expr_sum(squad[p, w] for p in players) for w in gameweeks}
     squad_fh_count = {w: so.expr_sum(squad_fh[p, w] for p in players) for w in gameweeks}
+    squad_ru_count = {w: so.expr_sum(squad_ru[p, w] for p in players) for w in gameweeks}
     number_of_transfers = {w: so.expr_sum(transfer_out[p,w] for p in players) for w in gameweeks}
     number_of_transfers[next_gw-1] = 1
     transfer_diff = {w: number_of_transfers[w] - free_transfers[w] - 15 * use_wc[w] for w in gameweeks}
     use_tc_gw = {w: so.expr_sum(use_tc[p,w] for p in players) for w in gameweeks}
+
+    #aa constraints
+
+    model.add_constraints((aa_ind[p,w] <= (use_aa[w] if merged_data.loc[p, 'element_type'] == 4 else 0) for p in players for w in gameweeks), name='aa_leq_chip')
+    model.add_constraints((aa_ind[p,w] <= (lineup[p,w] if merged_data.loc[p, 'element_type'] == 4 else 0) for p in players for w in gameweeks), name='aa_leq_selection')
+    model.add_constraints((aa_ind[p,w] + 1 >= lineup[p,w] + (use_aa[w] if merged_data.loc[p, 'element_type'] == 4 else 0) for p in players for w in gameweeks), name='aa_lb')
 
     # Chip combinations
     if run_chip_combinations is not None:
@@ -450,15 +465,18 @@ def solve_multi_period_fpl(data, options):
     # Constraints
     model.add_constraints((squad_count[w] == 15 for w in gameweeks), name='squad_count')
     model.add_constraints((squad_fh_count[w] == 15 * use_fh[w] for w in gameweeks), name='squad_fh_count')
+    model.add_constraints((squad_ru_count[w] == 15 * use_ru[w] for w in gameweeks), name='squad_ru_count')
     model.add_constraints((so.expr_sum(lineup[p,w] for p in players) == 11 + 4 * use_bb[w] for w in gameweeks), name='lineup_count')
     model.add_constraints((so.expr_sum(bench[p,w,0] for p in players if player_type[p] == 1) == 1 - use_bb[w] for w in gameweeks), name='bench_gk')
     model.add_constraints((so.expr_sum(bench[p,w,o] for p in players) == 1 - use_bb[w] for w in gameweeks for o in [1,2,3]), name='bench_count')
-    model.add_constraints((so.expr_sum(captain[p,w] for p in players) == 1 for w in gameweeks), name='captain_count')
-    model.add_constraints((so.expr_sum(vicecap[p,w] for p in players) == 1 for w in gameweeks), name='vicecap_count')
-    model.add_constraints((lineup[p,w] <= squad[p,w] + use_fh[w] for p in players for w in gameweeks), name='lineup_squad_rel')
-    model.add_constraints((bench[p,w,o] <= squad[p,w] + use_fh[w] for p in players for w in gameweeks for o in order), name='bench_squad_rel')
+    model.add_constraints((so.expr_sum(captain[p,w] for p in players) == 1 + use_2c[w] - use_aa[w] for w in gameweeks), name='captain_count')
+    model.add_constraints((so.expr_sum(vicecap[p,w] for p in players) == 1 - use_2c[w] - use_aa[w] for w in gameweeks), name='vicecap_count')
+    model.add_constraints((lineup[p,w] <= squad[p,w] + use_fh[w] + use_ru[w] for p in players for w in gameweeks), name='lineup_squad_rel')
+    model.add_constraints((bench[p,w,o] <= squad[p,w] + use_fh[w] + use_ru[w] for p in players for w in gameweeks for o in order), name='bench_squad_rel')
     model.add_constraints((lineup[p,w] <= squad_fh[p,w] + 1 - use_fh[w] for p in players for w in gameweeks), name='lineup_squad_fh_rel')
     model.add_constraints((bench[p,w,o] <= squad_fh[p,w] + 1 - use_fh[w] for p in players for w in gameweeks for o in order), name='bench_squad_fh_rel')
+    model.add_constraints((lineup[p,w] <= squad_ru[p,w] + 1  - use_ru[w] for p in players for w in gameweeks), name='lineup_squad_ru_rel')
+    model.add_constraints((bench[p,w,o] <= squad_ru[p,w] + 1  - use_ru[w] for p in players for w in gameweeks for o in order), name='bench_squad_ru_rel')
     model.add_constraints((captain[p,w] <= lineup[p,w] for p in players for w in gameweeks), name='captain_lineup_rel')
     model.add_constraints((vicecap[p,w] <= lineup[p,w] for p in players for w in gameweeks), name='vicecap_lineup_rel')
     model.add_constraints((captain[p,w] + vicecap[p,w] <= 1 for p in players for w in gameweeks), name='cap_vc_rel')
