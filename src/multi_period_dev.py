@@ -48,14 +48,14 @@ def connect():
     payload = {
         'password': credentials['password'],
         'login': credentials['email'],
-        'redirect_uri': 'https://fantasy.premierleague.com/',
+        'redirect_uri': 'https://en.fantasy.eliteserien.no/',
         'app': 'plfpl-web'
     }
     headers = {
         "user-agent": "Dalvik/2.1.0 (Linux; U; Android 6.0; Android SDK built for x86_64 Build/MASTER)",
         "cookie": "pl_euconsent-v2=CPUn1YtPUn1YtFCABAENBRCsAP_AAH_AAAwIF5wAQF5gXnABAXmAAAAA.YAAAAAAAAAAA; pl_euconsent-v2-intent-confirmed=^{^%^22tcf^%^22:^[755^]^%^2C^%^22oob^%^22:^[^]^}; pl_oob-vendors=^{^}; datadome=q_f99WYn0dSxMnuNGw8TQuIf2YeVio7m7Yk-jVBaWf43sM2v86YYVH17srelKLrR6B9ynB5V2z7pNs~jG6VKc~4u3up4WBrCYD6rekwuM3cRG8.9XbLGXAE4Cz~BWyv"
     }
-    t = session.get('https://fantasy.premierleague.com/')
+    t = session.get('https://en.fantasy.eliteserien.no/')
     time.sleep(1)
     v = session.post('https://users.premierleague.com/accounts/login/', data=payload, headers=headers, cookies=session.cookies)
     if v.status_code != 200:
@@ -65,12 +65,12 @@ def connect():
         print("""If you are getting this error, do the following: 
             - Open your browser and log in to FPL
             - After the login, go to following link (replace 'TEAM_ID' with your team ID)
-              > https://fantasy.premierleague.com/api/my-team/TEAM_ID/
+              > https://en.fantasy.eliteserien.no/api/my-team/TEAM_ID/
             - Create a file in this directory called 'team.json' and paste the content.
         """)
         return [None, None]
     else:
-        r = session.get('https://fantasy.premierleague.com/api/me/')
+        r = session.get('https://en.fantasy.eliteserien.no/api/me/')
         if r.status_code != 200:
             raise ValueError('Cannot read data')
         try:
@@ -81,14 +81,14 @@ def connect():
 
 
 def get_my_data(session, team_id):
-    r = session.get(f"https://fantasy.premierleague.com/api/my-team/{team_id}/")
+    r = session.get(f"https://en.fantasy.eliteserien.no/api/my-team/{team_id}/")
     d = r.json()
     d['team_id'] = team_id
     return d
 
 
 def generate_team_json(team_id):
-    BASE_URL = "https://fantasy.premierleague.com/api"
+    BASE_URL = "https://en.fantasy.eliteserien.no/api"
     with requests.Session() as session:
         static_url = f"{BASE_URL}/bootstrap-static/"
         static = session.get(static_url).json()
